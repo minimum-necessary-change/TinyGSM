@@ -10,7 +10,7 @@
 #define TinyGsmCommon_h
 
 // The current library version number
-#define TINYGSM_VERSION "0.7.9"
+#define TINYGSM_VERSION "0.9.7"
 
 #if defined(SPARK) || defined(PARTICLE)
   #include "Particle.h"
@@ -30,8 +30,12 @@
 
 #include <TinyGsmFifo.h>
 
+#ifndef TINY_GSM_YIELD_MS
+  #define TINY_GSM_YIELD_MS 0
+#endif
+
 #ifndef TINY_GSM_YIELD
-  #define TINY_GSM_YIELD() { delay(0); }
+  #define TINY_GSM_YIELD() { delay(TINY_GSM_YIELD_MS); }
 #endif
 
 #define TINY_GSM_ATTR_NOT_AVAILABLE __attribute__((error("Not available on this modem type")))
@@ -271,7 +275,7 @@ String TinyGsmDecodeHex16bit(String &instr) {
   }
 
 
-// Returns the number of characters avaialable in the TinyGSM fifo
+// Returns the number of characters available in the TinyGSM fifo
 // Assumes the modem chip has no internal fifo
 #define TINY_GSM_CLIENT_AVAILABLE_NO_MODEM_FIFO() \
   virtual int available() { \
@@ -391,6 +395,24 @@ String TinyGsmDecodeHex16bit(String &instr) {
   }
 
 
+// Read and dump anything remaining in the modem's internal buffer.
+// Using this in the client stop() function.
+// The socket will appear open in response to connected() even after it
+// closes until all data is read from the buffer.
+// Doing it this way allows the external mcu to find and get all of the data
+// that it wants from the socket even if it was closed externally.
+#define TINY_GSM_CLIENT_DUMP_MODEM_BUFFER() \
+    TINY_GSM_YIELD(); \
+    rx.clear(); \
+    at->maintain(); \
+    unsigned long startMillis = millis(); \
+    while (sock_available > 0 && (millis() - startMillis < maxWaitMs)) { \
+      at->modemRead(TinyGsmMin((uint16_t)rx.free(), sock_available), mux); \
+      rx.clear(); \
+      at->maintain(); \
+    }
+
+
 // The peek, flush, and connected functions
 #define TINY_GSM_CLIENT_PEEK_FLUSH_CONNECTED() \
   virtual int peek() { return -1; } /* TODO */ \
@@ -446,7 +468,7 @@ String TinyGsmDecodeHex16bit(String &instr) {
 // modem has no internal fifo
 #define TINY_GSM_MODEM_MAINTAIN_LISTEN() \
   void maintain() { \
-    waitResponse(10, NULL, NULL); \
+    waitResponse(100, NULL, NULL); \
   }
 
 

@@ -15,6 +15,8 @@
 // #define TINY_GSM_MODEM_SIM868
 // #define TINY_GSM_MODEM_SIM900
 // #define TINY_GSM_MODEM_SIM7000
+// #define TINY_GSM_MODEM_SIM5360
+// #define TINY_GSM_MODEM_SIM7600
 // #define TINY_GSM_MODEM_UBLOX
 // #define TINY_GSM_MODEM_SARAR4
 // #define TINY_GSM_MODEM_M95
@@ -28,16 +30,6 @@
 // #define TINY_GSM_MODEM_XBEE
 // #define TINY_GSM_MODEM_SEQUANS_MONARCH
 
-// See all AT commands, if wanted
-// #define DUMP_AT_COMMANDS
-
-// Define the serial console for debug prints, if needed
-#define TINY_GSM_DEBUG SerialMon
-
-// Range to attempt to autobaud
-#define GSM_AUTOBAUD_MIN 9600
-#define GSM_AUTOBAUD_MAX 38400
-
 // Set serial for debug console (to the Serial Monitor, default speed 115200)
 #define SerialMon Serial
 
@@ -49,8 +41,18 @@
 //#include <SoftwareSerial.h>
 //SoftwareSerial SerialAT(2, 3); // RX, TX
 
+// See all AT commands, if wanted
+//#define DUMP_AT_COMMANDS
+
+// Define the serial console for debug prints, if needed
+#define TINY_GSM_DEBUG SerialMon
+
+// Range to attempt to autobaud
+#define GSM_AUTOBAUD_MIN 9600
+#define GSM_AUTOBAUD_MAX 38400
+
 /*
- * Test enabled
+ * Tests enabled
  */
 #define TINY_GSM_TEST_GPRS true
 #define TINY_GSM_TEST_WIFI false
@@ -91,12 +93,9 @@ void setup() {
   SerialMon.begin(115200);
   delay(10);
 
+  // !!!!!!!!!!!
   // Set your reset, enable, power pins here
-  pinMode(20, OUTPUT);
-  digitalWrite(20, HIGH);
-
-  pinMode(23, OUTPUT);
-  digitalWrite(23, HIGH);
+  // !!!!!!!!!!!
 
   DBG("Wait...");
 
@@ -141,7 +140,7 @@ void loop() {
     delay(10000);
     return;
   }
-  SerialMon.println(" OK");
+  SerialMon.println(" success");
 #endif
 
 #if TINY_GSM_TEST_GPRS && defined TINY_GSM_MODEM_XBEE
@@ -193,7 +192,9 @@ void loop() {
   // DBG("GSM Time:", gsmTime);
   // String gsmDate = modem.getGSMDateTime(DATE_DATE);
   // DBG("GSM Date:", gsmDate);
+#endif
 
+#if TINY_GSM_TEST_USSD
   String ussd_balance = modem.sendUSSD("*111#");
   DBG("Balance (USSD):", ussd_balance);
 
@@ -246,7 +247,7 @@ void loop() {
   uint8_t chargeState = -99;
   int8_t percent = -99;
   uint16_t milliVolts = -9999;
-  modem.getBattStats(chargeState, percent, milliVolts)
+  modem.getBattStats(chargeState, percent, milliVolts);
   DBG("Battery charge state:", chargeState);
   DBG("Battery charge 'percent':", percent);
   DBG("Battery voltage:", milliVolts / 1000.0F);

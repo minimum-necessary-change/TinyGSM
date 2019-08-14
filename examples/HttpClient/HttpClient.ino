@@ -24,6 +24,8 @@
 // #define TINY_GSM_MODEM_SIM868
 // #define TINY_GSM_MODEM_SIM900
 // #define TINY_GSM_MODEM_SIM7000
+// #define TINY_GSM_MODEM_SIM5360
+// #define TINY_GSM_MODEM_SIM7600
 // #define TINY_GSM_MODEM_UBLOX
 // #define TINY_GSM_MODEM_SARAR4
 // #define TINY_GSM_MODEM_M95
@@ -37,22 +39,6 @@
 // #define TINY_GSM_MODEM_XBEE
 // #define TINY_GSM_MODEM_SEQUANS_MONARCH
 
-// Increase RX buffer to capture the entire response
-// Chips without internal buffering (A6/A7, ESP8266, M590)
-// need enough space in the buffer for the entire response
-// else data will be lost (and the http library will fail).
-#define TINY_GSM_RX_BUFFER 650
-
-// See all AT commands, if wanted
-//#define DUMP_AT_COMMANDS
-
-// Define the serial console for debug prints, if needed
-//#define TINY_GSM_DEBUG Serial
-//#define LOGGING  // <- Logging is for the HTTP library
-
-// Add a reception delay, if needed
-//#define TINY_GSM_YIELD() { delay(1); }
-
 // Set serial for debug console (to the Serial Monitor, default speed 115200)
 #define SerialMon Serial
 
@@ -63,6 +49,22 @@
 // or Software Serial on Uno, Nano
 //#include <SoftwareSerial.h>
 //SoftwareSerial SerialAT(2, 3); // RX, TX
+
+// Increase RX buffer to capture the entire response
+// Chips without internal buffering (A6/A7, ESP8266, M590)
+// need enough space in the buffer for the entire response
+// else data will be lost (and the http library will fail).
+#define TINY_GSM_RX_BUFFER 650
+
+// See all AT commands, if wanted
+//#define DUMP_AT_COMMANDS
+
+// Define the serial console for debug prints, if needed
+#define TINY_GSM_DEBUG SerialMon
+//#define LOGGING  // <- Logging is for the HTTP library
+
+// Add a reception delay - may be needed for a fast processor at a slow baud rate
+//#define TINY_GSM_YIELD() { delay(2); }
 
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
@@ -76,7 +78,7 @@ const char apn[]  = "YourAPN";
 const char gprsUser[] = "";
 const char gprsPass[] = "";
 const char wifiSSID[]  = "YourSSID";
-const char wifiPass[] = "SSIDpw";
+const char wifiPass[] = "YourWiFiPass";
 
 // Server details
 const char server[] = "vsh.pp.ua";
@@ -102,12 +104,9 @@ void setup() {
   SerialMon.begin(115200);
   delay(10);
 
+  // !!!!!!!!!!!
   // Set your reset, enable, power pins here
-  pinMode(20, OUTPUT);
-  digitalWrite(20, HIGH);
-
-  pinMode(23, OUTPUT);
-  digitalWrite(23, HIGH);
+  // !!!!!!!!!!!
 
   SerialMon.println("Wait...");
 
@@ -125,8 +124,12 @@ void setup() {
   SerialMon.print("Modem: ");
   SerialMon.println(modemInfo);
 
-  // Unlock your SIM card with a PIN
-  //modem.simUnlock("1234");
+#if TINY_GSM_USE_GPRS
+  // Unlock your SIM card with a PIN if needed
+  if ( GSM_PIN && modem.getSimStatus() != 3 ) {
+    modem.simUnlock(GSM_PIN);
+  }
+#endif
 }
 
 void loop() {
@@ -138,7 +141,7 @@ void loop() {
     delay(10000);
     return;
   }
-  SerialMon.println(" OK");
+  SerialMon.println(" success");
 #endif
 
 #if TINY_GSM_USE_GPRS && defined TINY_GSM_MODEM_XBEE
@@ -152,7 +155,7 @@ void loop() {
     delay(10000);
     return;
   }
-  SerialMon.println(" OK");
+  SerialMon.println(" success");
 
   if (modem.isNetworkConnected()) {
     SerialMon.println("Network connected");
@@ -166,7 +169,7 @@ void loop() {
       delay(10000);
       return;
     }
-    SerialMon.println(" OK");
+    SerialMon.println(" success");
 #endif
 
   SerialMon.print(F("Performing HTTP GET request... "));

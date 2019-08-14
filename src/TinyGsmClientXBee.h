@@ -80,6 +80,8 @@ public:
     init(&modem, mux);
   }
 
+  virtual ~GsmClient(){}
+
   bool init(TinyGsmXBee* modem, uint8_t mux = 0) {
     this->at = modem;
     this->mux = mux;
@@ -116,21 +118,21 @@ public:
     return connect(ip, port, 75);
   }
 
-  virtual void stop() {
+  virtual void stop(uint32_t maxWaitMs) {
     at->streamClear();  // Empty anything in the buffer
     at->commandMode();
     // For WiFi models, there's no direct way to close the socket.  This is a
     // hack to shut the socket by setting the timeout to zero.
     if (at->beeType == XBEE_S6B_WIFI) {
       at->sendAT(GF("TM0"));  // Set socket timeout (using Digi default of 10 seconds)
-      at->waitResponse(5000);  // This response can be slow
+      at->waitResponse(maxWaitMs);  // This response can be slow
       at->writeChanges();
     }
     // For cellular models, per documentation: If you change the TM (socket
     // timeout) value while in Transparent Mode, the current connection is
     // immediately closed.
     at->sendAT(GF("TM64"));  // Set socket timeout (using Digi default of 10 seconds)
-    at->waitResponse(5000);  // This response can be slow
+    at->waitResponse(maxWaitMs);  // This response can be slow
     at->writeChanges();
     at->exitCommand();
     at->streamClear();  // Empty anything remaining in the buffer
@@ -141,6 +143,8 @@ public:
     // will return false after a stop has been ordered.  This makes it play
     // much more nicely with libraries like PubSubClient.
   }
+
+  virtual void stop() { stop(5000L); }
 
   virtual size_t write(const uint8_t *buf, size_t size) {
     TINY_GSM_YIELD();
@@ -236,6 +240,8 @@ public:
     : GsmClient(modem, mux)
   {}
 
+  virtual ~GsmClientSecure(){}
+
 public:
   virtual int connect(const char *host, uint16_t port, int timeout_s) {
     // NOTE:  Not caling stop() or yeild() here
@@ -263,6 +269,7 @@ public:
       resetPin = -1;
       savedIP = IPAddress(0,0,0,0);
       savedHost = "";
+      savedHostIP = IPAddress(0,0,0,0);
       inCommandMode = false;
       memset(sockets, 0, sizeof(sockets));
   }
@@ -275,9 +282,12 @@ public:
       this->resetPin = resetPin;
       savedIP = IPAddress(0,0,0,0);
       savedHost = "";
+      savedHostIP = IPAddress(0,0,0,0);
       inCommandMode = false;
       memset(sockets, 0, sizeof(sockets));
   }
+
+  virtual ~TinyGsmXBee() {}
 
   /*
    * Basic functions
@@ -417,12 +427,12 @@ public:
 
   String getBeeName() {
     switch (beeType){
-      case XBEE_S6B_WIFI: return "Digi XBee® Wi-Fi";
-      case XBEE_LTE1_VZN: return "Digi XBee® Cellular LTE Cat 1";
-      case XBEE_3G: return "Digi XBee® Cellular 3G";
-      case XBEE3_LTE1_ATT: return "Digi XBee3™ Cellular LTE CAT 1";
-      case XBEE3_LTEM_ATT: return "Digi XBee3™ Cellular LTE-M";
-      default:  return "Digi XBee®";
+      case XBEE_S6B_WIFI: return "Digi XBee Wi-Fi";
+      case XBEE_LTE1_VZN: return "Digi XBee Cellular LTE Cat 1";
+      case XBEE_3G: return "Digi XBee Cellular 3G";
+      case XBEE3_LTE1_ATT: return "Digi XBee3 Cellular LTE CAT 1";
+      case XBEE3_LTEM_ATT: return "Digi XBee3 Cellular LTE-M";
+      default:  return "Digi XBee";
     }
   }
 
@@ -845,16 +855,20 @@ protected:
     bool retVal = false;
      XBEE_COMMAND_START_DECORATOR(5, false)
 
-    // If it's a new host or we dont' have a good IP, we need to do a DNS
-    // search for the IP to connect to
-    if (this->savedHost != String(host) || savedIP == IPAddress(0,0,0,0)) {
+    // If this is a new host name, replace the saved host and wipe out the saved host IP
+    if (this->savedHost != String(host)) {
       this->savedHost = String(host);
-      savedIP = getHostIP(host, timeout_s);  // This will return 0.0.0.0 if lookup fails
+      savedHostIP = IPAddress(0,0,0,0);
+    }
+
+    // If we don't have a good IP for the host, we need to do a DNS search
+    if (savedHostIP == IPAddress(0,0,0,0)) {
+      savedHostIP = getHostIP(host, timeout_s);  // This will return 0.0.0.0 if lookup fails
     }
 
     // If we now have a valid IP address, use it to connect
-    if (savedIP != IPAddress(0,0,0,0)) {  // Only re-set connection information if we have an IP address
-      retVal = modemConnect(savedIP, port, mux, ssl, timeout_ms - (millis() - startMillis));
+    if (savedHostIP != IPAddress(0,0,0,0)) {  // Only re-set connection information if we have an IP address
+      retVal = modemConnect(savedHostIP, port, mux, ssl, timeout_ms - (millis() - startMillis));
     }
 
     XBEE_COMMAND_END_DECORATOR
@@ -864,31 +878,36 @@ protected:
 
   bool modemConnect(IPAddress ip, uint16_t port, uint8_t mux = 0, bool ssl = false, int timeout_s = 75) {
 
-    savedIP = ip;  // Set the newly requested IP address
     bool success = true;
     uint32_t timeout_ms = ((uint32_t)timeout_s)*1000;
     XBEE_COMMAND_START_DECORATOR(5, false)
-    String host; host.reserve(16);
-    host += ip[0];
-    host += ".";
-    host += ip[1];
-    host += ".";
-    host += ip[2];
-    host += ".";
-    host += ip[3];
 
-    if (ssl) {
-      sendAT(GF("IP"), 4);  // Put in SSL over TCP communication mode
+    if (ip != savedIP) {  // Can skip almost everything if there's no change in the IP address
+      savedIP = ip;  // Set the newly requested IP address
+      String host; host.reserve(16);
+      host += ip[0];
+      host += ".";
+      host += ip[1];
+      host += ".";
+      host += ip[2];
+      host += ".";
+      host += ip[3];
+
+      if (ssl) {
+        sendAT(GF("IP"), 4);  // Put in SSL over TCP communication mode
+        success &= (1 == waitResponse());
+      } else {
+        sendAT(GF("IP"), 1);  // Put in TCP mode
+        success &= (1 == waitResponse());
+      }
+
+      sendAT(GF("DL"), host);  // Set the "Destination Address Low"
       success &= (1 == waitResponse());
-    } else {
-      sendAT(GF("IP"), 1);  // Put in TCP mode
+      sendAT(GF("DE"), String(port, HEX));  // Set the destination port
       success &= (1 == waitResponse());
+
+      success &= writeChanges();
     }
-
-    sendAT(GF("DL"), host);  // Set the "Destination Address Low"
-    success &= (1 == waitResponse());
-    sendAT(GF("DE"), String(port, HEX));  // Set the destination port
-    success &= (1 == waitResponse());
 
     for (unsigned long start = millis(); millis() - start < timeout_ms; ) {
       if (modemGetConnected()) {
@@ -993,6 +1012,7 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
     do {
       TINY_GSM_YIELD();
       while (stream.available() > 0) {
+        TINY_GSM_YIELD();
         int a = stream.read();
         if (a <= 0) continue; // Skip 0x00 bytes, just in case
         data += (char)a;
@@ -1031,7 +1051,8 @@ finish:
       if (data.length()) {
       }
     }
-    //DBG('<', index, '>');
+    //data.replace(GSM_NL, "/");
+    //DBG('<', index, '>', data);
     return index;
   }
 
@@ -1140,7 +1161,7 @@ finish:
   }
 
   bool gotIPforSavedHost() {
-    if (savedHost != "" && savedIP != IPAddress(0,0,0,0)) return true;
+    if (savedHost != "" && savedHostIP != IPAddress(0,0,0,0)) return true;
     else return false;
   }
 
@@ -1153,6 +1174,7 @@ protected:
   XBeeType      beeType;
   IPAddress     savedIP;
   String        savedHost;
+  IPAddress     savedHostIP;
   bool          inCommandMode;
   uint32_t      lastCommandModeMillis;
   GsmClient*    sockets[TINY_GSM_MUX_COUNT];

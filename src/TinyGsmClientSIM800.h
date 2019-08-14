@@ -63,6 +63,8 @@ public:
     init(&modem, mux);
   }
 
+  virtual ~GsmClient(){}
+
   bool init(TinyGsmSim800* modem, uint8_t mux = 1) {
     this->at = modem;
     this->mux = mux;
@@ -87,24 +89,14 @@ public:
 
 TINY_GSM_CLIENT_CONNECT_OVERLOADS()
 
-  virtual void stop() {
-    TINY_GSM_YIELD();
-    // Read and dump anything remaining in the modem's internal buffer.
-    // The socket will appear open in response to connected() even after it
-    // closes until all data is read from the buffer.
-    // Doing it this way allows the external mcu to find and get all of the data
-    // that it wants from the socket even if it was closed externally.
-    rx.clear();
-    at->maintain();
-    while (sock_available > 0) {
-      at->modemRead(TinyGsmMin((uint16_t)rx.free(), sock_available), mux);
-      rx.clear();
-      at->maintain();
-    }
+  virtual void stop(uint32_t maxWaitMs) {
+    TINY_GSM_CLIENT_DUMP_MODEM_BUFFER()
     at->sendAT(GF("+CIPCLOSE="), mux, GF(",1"));  // Quick close
     sock_connected = false;
     at->waitResponse();
   }
+
+  virtual void stop() { stop(15000L); }
 
 TINY_GSM_CLIENT_WRITE()
 
@@ -140,6 +132,8 @@ public:
     : GsmClient(modem, mux)
   {}
 
+  virtual ~GsmClientSecure(){}
+
 public:
   virtual int connect(const char *host, uint16_t port, int timeout_s) {
     stop();
@@ -158,6 +152,8 @@ public:
   {
     memset(sockets, 0, sizeof(sockets));
   }
+
+  virtual ~TinyGsmSim800() {}
 
   /*
    * Basic functions
@@ -718,6 +714,64 @@ TINY_GSM_MODEM_WAIT_FOR_NETWORK()
   float getTemperature() TINY_GSM_ATTR_NOT_AVAILABLE;
 
   /*
+   * NTP server functions
+   */
+
+  boolean isValidNumber(String str) {
+    if(!(str.charAt(0) == '+' || str.charAt(0) == '-' || isDigit(str.charAt(0)))) return false;
+
+    for(byte i=1;i < str.length(); i++) {
+      if(!(isDigit(str.charAt(i)) || str.charAt(i) == '.')) return false;
+    }
+    return true;
+  }
+
+  String ShowNTPError(byte error) {
+    switch (error) {
+      case 1:
+        return "Network time synchronization is successful";
+      case 61:
+        return "Network error";
+      case 62:
+        return "DNS resolution error";
+      case 63:
+        return "Connection error";
+      case 64:
+        return "Service response error";
+      case 65:
+        return "Service response timeout";
+      default:
+        return "Unknown error: " + String(error);
+    }
+  }
+
+  byte NTPServerSync(String server = "pool.ntp.org", byte TimeZone = 3) {
+    sendAT(GF("+CNTPCID=1"));
+    if (waitResponse(10000L) != 1) {
+        return -1;
+    }
+
+    sendAT(GF("+CNTP="), server, ',', String(TimeZone));
+    if (waitResponse(10000L) != 1) {
+        return -1;
+    }
+
+    sendAT(GF("+CNTP"));
+    if (waitResponse(10000L, GF(GSM_NL "+CNTP:"))) {
+        String result = stream.readStringUntil('\n');
+        result.trim();
+        if (isValidNumber(result))
+        {
+          return result.toInt();
+        }
+    }
+    else {
+      return -1;
+    }
+    return -1;
+  }
+
+  /*
    * Client related functions
    */
 
@@ -910,7 +964,8 @@ finish:
       }
       data = "";
     }
-    //DBG('<', index, '>');
+    //data.replace(GSM_NL, "/");
+    //DBG('<', index, '>', data);
     return index;
   }
 

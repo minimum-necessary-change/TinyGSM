@@ -58,6 +58,8 @@ public:
     init(&modem, mux);
   }
 
+  virtual ~GsmClient(){}
+
   bool init(TinyGsmSaraR4* modem, uint8_t mux = 0) {
     this->at = modem;
     this->mux = mux;
@@ -91,22 +93,14 @@ public:
 
 TINY_GSM_CLIENT_CONNECT_OVERLOADS()
 
-  virtual void stop() {
-    TINY_GSM_YIELD();
-    // Read and dump anything remaining in the modem's internal buffer.
-    // The socket will appear open in response to connected() even after it
-    // closes until all data is read from the buffer.
-    // Doing it this way allows the external mcu to find and get all of the data
-    // that it wants from the socket even if it was closed externally.
-    rx.clear();
-    at->maintain();
-    while (sock_connected && sock_available > 0) {
-      at->modemRead(TinyGsmMin((uint16_t)rx.free(), sock_available), mux);
-      rx.clear();
-      at->maintain();
-    }
-    at->modemDisconnect(mux);
+  virtual void stop(uint32_t maxWaitMs) {
+    TINY_GSM_CLIENT_DUMP_MODEM_BUFFER()
+    at->sendAT(GF("+USOCL="), mux);
+    at->waitResponse((maxWaitMs - (millis() - startMillis)));  // NOTE:  can take up to 120s to get a response
+    sock_connected = false;
   }
+
+  virtual void stop() { stop(135000L); }
 
 TINY_GSM_CLIENT_WRITE()
 
@@ -142,6 +136,8 @@ public:
     : GsmClient(modem, mux)
   {}
 
+  virtual ~GsmClientSecure(){}
+
 public:
   virtual int connect(const char *host, uint16_t port, int timeout_s) {
     stop();
@@ -167,6 +163,8 @@ public:
   {
     memset(sockets, 0, sizeof(sockets));
   }
+
+  virtual ~TinyGsmSaraR4(){}
 
   /*
    * Basic functions
@@ -328,8 +326,7 @@ TINY_GSM_MODEM_GET_SIMCCID_CCID()
     return SIM_ERROR;
   }
 
-
-TINY_GSM_MODEM_GET_REGISTRATION_XREG(CEREG)
+TINY_GSM_MODEM_GET_REGISTRATION_XREG(CREG)
 
 TINY_GSM_MODEM_GET_OPERATOR_COPS()
 
@@ -343,8 +340,8 @@ TINY_GSM_MODEM_GET_CSQ()
     RegStatus s = getRegistrationStatus();
     if (s == REG_OK_HOME || s == REG_OK_ROAMING)
       return true;
-    else if (s == REG_UNKNOWN)  // for some reason, it can hang at unknown..
-      return isGprsConnected();
+    // else if (s == REG_UNKNOWN)  // for some reason, it can hang at unknown..
+    //   return isGprsConnected();
     else return false;
   }
 
@@ -501,7 +498,7 @@ TINY_GSM_MODEM_GET_GPRS_IP_CONNECTED()
       return 0;
     }
 
-    int8_t res = stream.readStringUntil(',').toInt();
+    int res = stream.readStringUntil(',').toInt();
     int8_t percent = res*20;  // return is 0-5
     // Wait for final OK
     waitResponse();
@@ -570,16 +567,6 @@ protected:
     return (1 == rsp);
   }
 
-  bool modemDisconnect(uint8_t mux) {
-    TINY_GSM_YIELD();
-    if (!modemGetConnected(mux)) {
-      sockets[mux]->sock_connected = false;
-      return true;
-    }
-    sendAT(GF("+USOCL="), mux);
-    return 1 == waitResponse(120000L);  // can take up to 120s to get a response
-  }
-
   int16_t modemSend(const void* buff, size_t len, uint8_t mux) {
     sendAT(GF("+USOWR="), mux, ',', len);
     if (waitResponse(GF("@")) != 1) {
@@ -629,12 +616,11 @@ protected:
       result = stream.readStringUntil('\n').toInt();
       // if (result) DBG("### DATA AVAILABLE:", result, "on", mux);
       waitResponse();
-    } else if (res == 3) {
-      streamSkipUntil('\n'); // Skip the error text
     }
     if (!result) {
       sockets[mux]->sock_connected = modemGetConnected(mux);
     }
+    DBG("### AVAILABLE:", result, "on", mux);
     return result;
   }
 
@@ -689,6 +675,7 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
     do {
       TINY_GSM_YIELD();
       while (stream.available() > 0) {
+        TINY_GSM_YIELD();
         int a = stream.read();
         if (a <= 0) continue; // Skip 0x00 bytes, just in case
         data += (char)a;
@@ -700,6 +687,9 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
           goto finish;
         } else if (r3 && data.endsWith(r3)) {
           index = 3;
+          if (r3 == GFP(GSM_CME_ERROR)) {
+            streamSkipUntil('\n');  // Read out the error
+          }
           goto finish;
         } else if (r4 && data.endsWith(r4)) {
           index = 4;
@@ -707,7 +697,7 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
         } else if (r5 && data.endsWith(r5)) {
           index = 5;
           goto finish;
-        } else if (data.endsWith(GF(GSM_NL "+UUSORD:"))) {
+        } else if (data.endsWith(GF("+UUSORD:"))) {
           int mux = stream.readStringUntil(',').toInt();
           int len = stream.readStringUntil('\n').toInt();
           if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {
@@ -716,13 +706,13 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
           }
           data = "";
           DBG("### URC Data Received:", len, "on", mux);
-        } else if (data.endsWith(GF(GSM_NL "+UUSOCL:"))) {
+        } else if (data.endsWith(GF("+UUSOCL:"))) {
           int mux = stream.readStringUntil('\n').toInt();
           if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {
             sockets[mux]->sock_connected = false;
           }
           data = "";
-          DBG("### URC Sock Closed:", mux);
+          DBG("### URC Sock Closed: ", mux);
         }
       }
     } while (millis() - startMillis < timeout_ms);
@@ -734,7 +724,8 @@ finish:
       }
       data = "";
     }
-    //DBG('<', index, '>');
+    //data.replace(GSM_NL, "/");
+    //DBG('<', index, '>', data);
     return index;
   }
 

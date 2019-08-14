@@ -57,6 +57,8 @@ public:
     init(&modem, mux);
   }
 
+  virtual ~GsmClient(){}
+
   bool init(TinyGsmESP8266* modem, uint8_t mux = 1) {
     this->at = modem;
     this->mux = mux;
@@ -78,13 +80,15 @@ public:
 
 TINY_GSM_CLIENT_CONNECT_OVERLOADS()
 
-  virtual void stop() {
+  virtual void stop(uint32_t maxWaitMs) {
     TINY_GSM_YIELD();
     at->sendAT(GF("+CIPCLOSE="), mux);
     sock_connected = false;
-    at->waitResponse();
+    at->waitResponse(maxWaitMs);
     rx.clear();
   }
+
+  virtual void stop() { stop(5000L); }
 
 TINY_GSM_CLIENT_WRITE()
 
@@ -117,6 +121,8 @@ public:
     : GsmClient(modem, mux)
   {}
 
+  virtual ~GsmClientSecure() {}
+
 public:
   virtual int connect(const char *host, uint16_t port, int timeout_s) {
     stop();
@@ -135,6 +141,8 @@ public:
   {
     memset(sockets, 0, sizeof(sockets));
   }
+
+  virtual ~TinyGsmESP8266() {}
 
   /*
    * Basic functions
@@ -404,6 +412,7 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
     do {
       TINY_GSM_YIELD();
       while (stream.available() > 0) {
+        TINY_GSM_YIELD();
         int a = stream.read();
         if (a <= 0) continue; // Skip 0x00 bytes, just in case
         data += (char)a;
@@ -422,14 +431,14 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
         } else if (r5 && data.endsWith(r5)) {
           index = 5;
           goto finish;
-        } else if (data.endsWith(GF(GSM_NL "+IPD,"))) {
+        } else if (data.endsWith(GF("+IPD,"))) {
           int mux = stream.readStringUntil(',').toInt();
           int len = stream.readStringUntil(':').toInt();
           int len_orig = len;
           if (len > sockets[mux]->rx.free()) {
-            DBG("### Buffer overflow: ", len, "->", sockets[mux]->rx.free());
+            DBG("### Buffer overflow: ", len, "received vs", sockets[mux]->rx.free(), "available");
           } else {
-            DBG("### Got: ", len, "->", sockets[mux]->rx.free());
+            DBG("### Got Data: ", len, "on", mux);
           }
           while (len--) {
             TINY_GSM_MODEM_STREAM_TO_MUX_FIFO_WITH_DOUBLE_TIMEOUT
@@ -458,7 +467,8 @@ finish:
       }
       data = "";
     }
-    //DBG('<', index, '>');
+    //data.replace(GSM_NL, "/");
+    //DBG('<', index, '>', data);
     return index;
   }
 

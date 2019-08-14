@@ -14,7 +14,6 @@
 //#pragma message("TinyGSM:  TinyGsmClientMC60")
 
 //#define TINY_GSM_DEBUG Serial
-//#define TINY_GSM_USE_HEX
 
 #if !defined(TINY_GSM_RX_BUFFER)
   #define TINY_GSM_RX_BUFFER 64
@@ -62,6 +61,8 @@ public:
     init(&modem, mux);
   }
 
+  virtual ~GsmClient(){}
+
   bool init(TinyGsmMC60* modem, uint8_t mux = 1) {
     this->at = modem;
     this->mux = mux;
@@ -85,24 +86,14 @@ public:
 
 TINY_GSM_CLIENT_CONNECT_OVERLOADS()
 
-  virtual void stop() {
-    TINY_GSM_YIELD();
-    // Read and dump anything remaining in the modem's internal buffer.
-    // The socket will appear open in response to connected() even after it
-    // closes until all data is read from the buffer.
-    // Doing it this way allows the external mcu to find and get all of the data
-    // that it wants from the socket even if it was closed externally.
-    rx.clear();
-    at->maintain();
-    while (sock_available > 0) {
-      at->modemRead(TinyGsmMin((uint16_t)rx.free(), sock_available), mux);
-      rx.clear();
-      at->maintain();
-    }
+  virtual void stop(uint32_t maxWaitMs) {
+    TINY_GSM_CLIENT_DUMP_MODEM_BUFFER()
     at->sendAT(GF("+QICLOSE="), mux);
     sock_connected = false;
-    at->waitResponse(60000L, GF("CLOSED"), GF("CLOSE OK"), GF("ERROR"));
+    at->waitResponse((maxWaitMs - (millis() - startMillis)), GF("CLOSED"), GF("CLOSE OK"), GF("ERROR"));
   }
+
+  virtual void stop() { stop(75000L); }
 
 TINY_GSM_CLIENT_WRITE()
 
@@ -137,6 +128,8 @@ private:
 //     : GsmClient(modem, mux)
 //   {}
 //
+//   virtual ~GsmClientSecure(){}
+//
 // public:
 //   virtual int connect(const char *host, uint16_t port, int timeout_s) {
 //     stop();
@@ -155,6 +148,8 @@ public:
   {
     memset(sockets, 0, sizeof(sockets));
   }
+
+  virtual ~TinyGsmMC60() {}
 
   /*
    * Basic functions
@@ -684,6 +679,7 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
     do {
       TINY_GSM_YIELD();
       while (stream.available() > 0) {
+        TINY_GSM_YIELD();
         int a = stream.read();
         if (a <= 0) continue; // Skip 0x00 bytes, just in case
         data += (char)a;
@@ -733,7 +729,8 @@ finish:
       }
       data = "";
     }
-    //DBG('<', index, '>');
+    //data.replace(GSM_NL, "/");
+    //DBG('<', index, '>', data);
     return index;
   }
 

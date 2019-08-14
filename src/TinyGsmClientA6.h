@@ -57,6 +57,8 @@ public:
     init(&modem);
   }
 
+  virtual ~GsmClient(){}
+
   bool init(TinyGsmA6* modem) {
     this->at = modem;
     this->mux = -1;
@@ -81,13 +83,15 @@ public:
 
 TINY_GSM_CLIENT_CONNECT_OVERLOADS()
 
-  virtual void stop() {
+  virtual void stop(uint32_t maxWaitMs) {
     TINY_GSM_YIELD();
     at->sendAT(GF("+CIPCLOSE="), mux);
     sock_connected = false;
-    at->waitResponse();
+    at->waitResponse(maxWaitMs);
     rx.clear();
   }
+
+  virtual void stop() { stop(1000L); }
 
 TINY_GSM_CLIENT_WRITE()
 
@@ -118,6 +122,8 @@ public:
   {
     memset(sockets, 0, sizeof(sockets));
   }
+  
+  virtual ~TinyGsmA6() {}
 
   /*
    * Basic functions
@@ -600,6 +606,7 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
     do {
       TINY_GSM_YIELD();
       while (stream.available() > 0) {
+        TINY_GSM_YIELD();
         int a = stream.read();
         if (a <= 0) continue; // Skip 0x00 bytes, just in case
         data += (char)a;
@@ -652,7 +659,8 @@ finish:
       }
       data = "";
     }
-    //DBG('<', index, '>');
+    //data.replace(GSM_NL, "/");
+    //DBG('<', index, '>', data);
     return index;
   }
 

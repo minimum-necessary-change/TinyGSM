@@ -58,6 +58,8 @@ public:
     init(&modem, mux);
   }
 
+  virtual ~GsmClient(){}
+
   bool init(TinyGsmUBLOX* modem, uint8_t mux = 0) {
     this->at = modem;
     this->mux = mux;
@@ -91,28 +93,20 @@ public:
 
 TINY_GSM_CLIENT_CONNECT_OVERLOADS()
 
-  virtual void stop() {
-    TINY_GSM_YIELD();
-    // Read and dump anything remaining in the modem's internal buffer.
-    // The socket will appear open in response to connected() even after it
-    // closes until all data is read from the buffer.
-    // Doing it this way allows the external mcu to find and get all of the data
-    // that it wants from the socket even if it was closed externally.
-    rx.clear();
-    at->maintain();
-    while (sock_connected && sock_available > 0) {
-      at->modemRead(TinyGsmMin((uint16_t)rx.free(), sock_available), mux);
-      rx.clear();
-      at->maintain();
-    }
-    at->modemDisconnect(mux);
+  virtual void stop(uint32_t maxWaitMs) {
+    TINY_GSM_CLIENT_DUMP_MODEM_BUFFER()
+    at->sendAT(GF("+USOCL="), mux);
+    at->waitResponse();  // should return within 1s
+    sock_connected = false;
   }
 
-TINY_GSM_CLIENT_WRITE() ;
+  virtual void stop() { stop(15000L); }
 
-TINY_GSM_CLIENT_AVAILABLE_WITH_BUFFER_CHECK() ;
+TINY_GSM_CLIENT_WRITE()
 
-TINY_GSM_CLIENT_READ_WITH_BUFFER_CHECK() ;
+TINY_GSM_CLIENT_AVAILABLE_WITH_BUFFER_CHECK()
+
+TINY_GSM_CLIENT_READ_WITH_BUFFER_CHECK()
 
 TINY_GSM_CLIENT_PEEK_FLUSH_CONNECTED()
 
@@ -142,6 +136,8 @@ public:
     : GsmClient(modem, mux)
   {}
 
+  virtual ~GsmClientSecure(){}
+
 public:
   virtual int connect(const char *host, uint16_t port, int timeout_s) {
     stop();
@@ -167,6 +163,8 @@ public:
   {
     memset(sockets, 0, sizeof(sockets));
   }
+
+  virtual ~TinyGsmUBLOX() {}
 
   /*
    * Basic functions
@@ -370,6 +368,14 @@ TINY_GSM_MODEM_WAIT_FOR_NETWORK()
     // "internal" PDP context, i.e. a data connection using the internal IP
     // stack and related AT commands for sockets.
 
+    // Packet switched data configuration
+    // AT+UPSD=<profile_id>,<param_tag>,<param_val>
+    // profile_id = 0 - PSD profile identifier, in range 0-6 (NOT PDP context)
+    // param_tag = 1: APN
+    // param_tag = 2: username
+    // param_tag = 3: password
+    // param_tag = 7: IP address Note: IP address set as "0.0.0.0" means
+    //    dynamic IP address assigned during PDP context activation
     sendAT(GF("+UPSD=0,1,\""), apn, '"');  // Set APN for PSD profile 0
     waitResponse();
 
@@ -385,16 +391,35 @@ TINY_GSM_MODEM_WAIT_FOR_NETWORK()
     sendAT(GF("+UPSD=0,7,\"0.0.0.0\"")); // Dynamic IP on PSD profile 0
     waitResponse();
 
+    // Packet switched data action
+    // AT+UPSDA=<profile_id>,<action>
+    // profile_id = 0: PSD profile identifier, in range 0-6 (NOT PDP context)
+    // action = 3: activate; it activates a PDP context with the specified profile,
+    // using the current parameters
     sendAT(GF("+UPSDA=0,3")); // Activate the PDP context associated with profile 0
-    if (waitResponse(360000L) != 1) {
+    if (waitResponse(360000L) != 1) {  // Should return ok
       return false;
     }
 
-    sendAT(GF("+UPSND=0,8")); // Activate PSD profile 0
-    if (waitResponse(GF(",8,1")) != 1) {
+    // Packet switched network-assigned data - Returns the current (dynamic)
+    // network-assigned or network-negotiated value of the specified parameter
+    // for the active PDP context associated with the specified PSD profile.
+    // AT+UPSND=<profile_id>,<param_tag>
+    // profile_id = 0: PSD profile identifier, in range 0-6 (NOT PDP context)
+    // param_tag = 8: PSD profile status: if the profile is active the return value is 1, 0 otherwise
+    sendAT(GF("+UPSND=0,8")); // Check if PSD profile 0 is now active
+    int res = waitResponse(GF(",8,1"), GF(",8,0"));
+    waitResponse();  // Should return another OK
+    if (res == 1) {
+      return true;  // It's now active
+    } else if (res == 2) {  // If it's not active yet, wait for the +UUPSDA URC
+      if (waitResponse(180000L, GF("+UUPSDA: 0")) != 1) {  // 0=successful
+        return false;
+      }
+      streamSkipUntil('\n');  // Ignore the IP address, if returned
+    } else {
       return false;
     }
-    waitResponse();
 
     return true;
   }
@@ -548,26 +573,9 @@ protected:
     //waitResponse();
 
     // connect on the allocated socket
-    // TODO:  Use faster "asynchronous" connection?
-    // We would have to wait for the +UUSOCO URC to verify connection
     sendAT(GF("+USOCO="), *mux, ",\"", host, "\",", port);
     int rsp = waitResponse(timeout_ms);
     return (1 == rsp);
-  }
-
-  bool modemDisconnect(uint8_t mux) {
-    TINY_GSM_YIELD();
-    if (!modemGetConnected(mux)) {
-      sockets[mux]->sock_connected = false;
-      return true;
-    }
-    bool success;
-    sendAT(GF("+USOCL="), mux);
-    success = 1 == waitResponse();  // should return within 1s
-    if (success) {
-      sockets[mux]->sock_connected = false;
-    }
-    return success;
   }
 
   int16_t modemSend(const void* buff, size_t len, uint8_t mux) {
@@ -619,12 +627,11 @@ protected:
       result = stream.readStringUntil('\n').toInt();
       // if (result) DBG("### DATA AVAILABLE:", result, "on", mux);
       waitResponse();
-    } else if (res == 3) {
-      streamSkipUntil('\n'); // Skip the error text
     }
     if (!result) {
       sockets[mux]->sock_connected = modemGetConnected(mux);
     }
+    DBG("### AVAILABLE:", result, "on", mux);
     return result;
   }
 
@@ -679,6 +686,7 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
     do {
       TINY_GSM_YIELD();
       while (stream.available() > 0) {
+        TINY_GSM_YIELD();
         int a = stream.read();
         if (a <= 0) continue; // Skip 0x00 bytes, just in case
         data += (char)a;
@@ -690,6 +698,9 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
           goto finish;
         } else if (r3 && data.endsWith(r3)) {
           index = 3;
+          if (r3 == GFP(GSM_CME_ERROR)) {
+            streamSkipUntil('\n');  // Read out the error
+          }
           goto finish;
         } else if (r4 && data.endsWith(r4)) {
           index = 4;
@@ -697,7 +708,7 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
         } else if (r5 && data.endsWith(r5)) {
           index = 5;
           goto finish;
-        } else if (data.endsWith(GF(GSM_NL "+UUSORD:"))) {
+        } else if (data.endsWith(GF("+UUSORD:"))) {
           int mux = stream.readStringUntil(',').toInt();
           int len = stream.readStringUntil('\n').toInt();
           if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {
@@ -706,7 +717,7 @@ TINY_GSM_MODEM_STREAM_UTILITIES()
           }
           data = "";
           DBG("### URC Data Received:", len, "on", mux);
-        } else if (data.endsWith(GF(GSM_NL "+UUSOCL:"))) {
+        } else if (data.endsWith(GF("+UUSOCL:"))) {
           int mux = stream.readStringUntil('\n').toInt();
           if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {
             sockets[mux]->sock_connected = false;
@@ -724,7 +735,8 @@ finish:
       }
       data = "";
     }
-    //DBG('<', index, '>');
+    //data.replace(GSM_NL, "/");
+    //DBG('<', index, '>', data);
     return index;
   }
 

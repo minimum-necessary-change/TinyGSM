@@ -33,6 +33,8 @@
 // #define TINY_GSM_MODEM_SIM868
 // #define TINY_GSM_MODEM_SIM900
 // #define TINY_GSM_MODEM_SIM7000
+// #define TINY_GSM_MODEM_SIM5360
+// #define TINY_GSM_MODEM_SIM7600
 // #define TINY_GSM_MODEM_UBLOX
 // #define TINY_GSM_MODEM_SARAR4
 // #define TINY_GSM_MODEM_M95
@@ -46,19 +48,6 @@
 // #define TINY_GSM_MODEM_XBEE
 // #define TINY_GSM_MODEM_SEQUANS_MONARCH
 
-// See all AT commands, if wanted
-// #define DUMP_AT_COMMANDS
-
-// Define the serial console for debug prints, if needed
-#define TINY_GSM_DEBUG SerialMon
-
-// Range to attempt to autobaud
-#define GSM_AUTOBAUD_MIN 9600
-#define GSM_AUTOBAUD_MAX 38400
-
-// Add a reception delay, if needed
-#define TINY_GSM_YIELD() { delay(2); }
-
 // Set serial for debug console (to the Serial Monitor, default speed 115200)
 #define SerialMon Serial
 
@@ -70,12 +59,32 @@
 //#include <SoftwareSerial.h>
 //SoftwareSerial SerialAT(2, 3); // RX, TX
 
+// See all AT commands, if wanted
+//#define DUMP_AT_COMMANDS
+
+// Define the serial console for debug prints, if needed
+#define TINY_GSM_DEBUG SerialMon
+
+// Range to attempt to autobaud
+#define GSM_AUTOBAUD_MIN 9600
+#define GSM_AUTOBAUD_MAX 38400
+
+// Add a reception delay - may be needed for a fast processor at a slow baud rate
+//#define TINY_GSM_YIELD() { delay(2); }
+
+#define TINY_GSM_USE_GPRS true
+#define TINY_GSM_USE_WIFI false
+
+// set GSM PIN, if any
+#define GSM_PIN ""
 
 // Your GPRS credentials
 // Leave empty, if missing user or pass
 const char apn[]  = "YourAPN";
-const char user[] = "";
-const char pass[] = "";
+const char gprsUser[] = "";
+const char gprsPass[] = "";
+const char wifiSSID[]  = "YourSSID";
+const char wifiPass[] = "YourWiFiPass";
 
 // MQTT details
 const char* broker = "test.mosquitto.org";
@@ -92,7 +101,6 @@ const char* topicLedStatus = "GsmClientTest/ledStatus";
   StreamDebugger debugger(SerialAT, SerialMon);
   TinyGsm modem(debugger);
 #else
-
 TinyGsm modem(SerialAT);
 #endif
 TinyGsmClient client(modem);
@@ -104,19 +112,15 @@ int ledStatus = LOW;
 long lastReconnectAttempt = 0;
 
 void setup() {
-
   // Set console baud rate
   SerialMon.begin(115200);
   delay(10);
 
-  // Set your reset, enable, power pins here
   pinMode(LED_PIN, OUTPUT);
 
-  pinMode(20, OUTPUT);
-  digitalWrite(20, HIGH);
-
-  pinMode(23, OUTPUT);
-  digitalWrite(23, LOW);
+  // !!!!!!!!!!!
+  // Set your reset, enable, power pins here
+  // !!!!!!!!!!!
 
   SerialMon.println("Wait...");
 
@@ -134,17 +138,21 @@ void setup() {
   SerialMon.print("Modem: ");
   SerialMon.println(modemInfo);
 
-  // Unlock your SIM card with a PIN
-  //modem.simUnlock("1234");
+#if TINY_GSM_USE_GPRS
+  // Unlock your SIM card with a PIN if needed
+  if ( GSM_PIN && modem.getSimStatus() != 3 ) {
+    modem.simUnlock(GSM_PIN);
+  }
+#endif
 
-#if TINY_GSM_USE_WIFI
+#if defined TINY_GSM_USE_WIFI && defined TINY_GSM_MODEM_HAS_WIFI
   SerialMon.print(F("Setting SSID/password..."));
   if (!modem.networkConnect(wifiSSID, wifiPass)) {
     SerialMon.println(" fail");
     delay(10000);
     return;
   }
-  SerialMon.println(" OK");
+  SerialMon.println(" success");
 #endif
 
 #if TINY_GSM_USE_GPRS && defined TINY_GSM_MODEM_XBEE
@@ -153,12 +161,12 @@ void setup() {
 #endif
 
   SerialMon.print("Waiting for network...");
-  if (!modem.waitForNetwork(240000L)) {
+  if (!modem.waitForNetwork()) {
     SerialMon.println(" fail");
     delay(10000);
     return;
   }
-  SerialMon.println(" OK");
+  SerialMon.println(" success");
 
   if (modem.isNetworkConnected()) {
     SerialMon.println("Network connected");
@@ -166,13 +174,13 @@ void setup() {
 
 #if TINY_GSM_USE_GPRS && defined TINY_GSM_MODEM_HAS_GPRS
     SerialMon.print(F("Connecting to "));
-  SerialMon.print(apn);
+    SerialMon.print(apn);
     if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
-    SerialMon.println(" fail");
+      SerialMon.println(" fail");
       delay(10000);
       return;
-  }
-  SerialMon.println(" OK");
+    }
+    SerialMon.println(" success");
 #endif
 
   // MQTT Broker setup
@@ -194,7 +202,7 @@ boolean mqttConnect() {
     SerialMon.println(" fail");
     return false;
   }
-  SerialMon.println(" OK");
+  SerialMon.println(" success");
   mqtt.publish(topicInit, "GsmClientTest started");
   mqtt.subscribe(topicLed);
   return mqtt.connected();
