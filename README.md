@@ -79,9 +79,9 @@ Watch this repo for new updates! And of course, contributions are welcome ;)
 - UDP
     - Not yet supported on any module, though it may be some day
 - SSL/TLS (HTTPS)
-    - Supported on¹:
+    - Supported on:
         - SIM800, u-Blox, XBee _cellular_, ESP8266, and Sequans Monarch
-        ¹ - only some device models or firmware revisions have this feature (SIM8xx R14.18, A7, etc.)
+        - Note:  only some device models or firmware revisions have this feature (SIM8xx R14.18, A7, etc.)
     - Not yet supported on:
         - Quectel modems, SIM7000, SIM5360/5320/7100/7500/7600
     - Not possible on:
@@ -116,9 +116,8 @@ Watch this repo for new updates! And of course, contributions are welcome ;)
     - SIM800, SIM and SIM7000 only
 
 **Credits**
-- Primary Author/Contributor:
+- Primary Authors/Contributors:
     - [vshymanskyy](https://github.com/vshymanskyy)
-- Digi XBee, editing of all modules:
     - [SRGDamia1](https://github.com/SRGDamia1/)
 - SIM7000:
     - [captFuture](https://github.com/captFuture/)
@@ -206,7 +205,7 @@ When using ESP32 `HardwareSerial`, you may need to specify additional parameters
 Please [refer to this comment](https://github.com/vshymanskyy/TinyGSM/issues/91#issuecomment-356024747).
 
 #### HttpClient
-You will not be able to compile the HttpClient or HttpsClient examples with ESP32 core >1.0.1.  Downgrade to version 1.0.1 or use the WebClient example.  Please comment on the issue on the ESP32 core, not in this library:  https://github.com/espressif/arduino-esp32/issues/2755
+You will not be able to compile the HttpClient or HttpsClient examples with ESP32 core 1.0.2.  Upgrade to 1.0.3, downgrade to version 1.0.1 or use the WebClient example.
 
 ### SAMD21
 
